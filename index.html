@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vanilla Compound Extension</title>
+</head>
+<body style="background: #FFF;">
+
+  <h1>Compound Extension Example</h1>
+
+  <p>Embedded iFrame</p>
+
+  <p id="status"></p>
+
+</body>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+<script type="text/javascript">
+
+function RPCWeb3Provider (sendRPC) {
+  const provider = ethers.providers.JsonRpcProvider;
+  let _cache;
+
+  async function sendWeb3(sendRPC, method, params) {
+    let { data } = await sendRPC({ type: 'sendWeb3', method, params });
+    return data;
+  }
+
+  async function send(method, params) {
+      const cache = ["eth_chainId", "eth_blockNumber"].indexOf(method) >= 0;
+      if (cache && method in _cache) {
+        return _cache[method];
+      }
+      let res = sendWeb3(sendRPC, method, params);
+      if (cache) {
+        _cache[method] = res;
+        setTimeout(() => {
+          delete _cache[method];
+        }, 0);
+      }
+      return res;
+  }
+
+  async function sendAsync(payload, callback) {
+    const {id, method, params} = payload;
+    let res;
+    try {
+      let result = await send(method, params || []);
+      callback(undefined, {
+        id,
+        jsonrpc: '2.0',
+        method,
+        result,
+      });
+    } catch (error) {
+      callback(error, {
+        id,
+        jsonrpc: '2.0',
+        method,
+        error
+      });
+    }
+  }
+
+  let p = new provider(window.ethereum);
+  p.send = send;
+  p.sendAsync = sendAsync;
+  return p;
+}
+
+function buildRPC() {
+  let msgId = 1;
+  let handlers = {};
+  let extHandlers = [];
+  let extBacklog = [];
+
+  function handleExtMessage(extMsg) {
+    for (let handler of extHandlers) {
+      if (extMsg.type in handler) {
+        if (extMsg.type === 'setTheme') {
+          handler[extMsg.type](extMsg);
+        } else if (extMsg.type === 'setCometState') {
+          handler[extMsg.type](extMsg);
+        }
+      }
+    }
+  }
+
+  function sendRPC(inMsg) {
+    msgId++;
+    let resolve;
+    let reject;
+    let p = new Promise((resolve_, reject_) => {
+      resolve = resolve_;
+      reject = reject_;
+    });
+    handlers[msgId] = { resolve, reject };
+    if (window.top && window.self !== window.top) {
+      window.top.postMessage( { msgId: msgId, message: inMsg }, "*");
+    }
+    return p;
+  }
+
+  const handler = (event) => {
+    if ('type' in event.data) {
+      let extMsg = event.data;
+      if (extHandlers.length === 0) {
+        extBacklog.push(extMsg);
+      } else {
+        handleExtMessage(extMsg);
+      }
+    } else {
+      let msgId = event.data.msgId;
+      let result = event.data.result;
+      let error = event.data.error;
+      if (msgId !== undefined && msgId in handlers) {
+        let { resolve, reject } = handlers[msgId];
+        if (error) {
+          reject(error);
+        } else if (result) {
+          resolve(result);
+        }
+      }
+    }
+  }
+
+  function attachHandler() {
+    window.addEventListener("message", handler);
+  }
+
+  function detachHandler() {
+    window.removeEventListener("message", handler)
+  }
+
+  function on(handler) {
+    extHandlers.push(handler);
+    extBacklog.forEach(handleExtMessage);
+  }
+
+  return {
+    on,
+    sendRPC,
+    attachHandler,
+    detachHandler
+  };
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const statusElement = document.getElementById('status');
+  if (window.ethereum) {
+    // be sure to add ?embedded=true query param to the end of your extension source URL
+    const embedded = window.location.search.includes('embedded');
+    let rpc = new buildRPC();
+    let provider;
+    if (!embedded) {
+      provider = new ethers.providers.Web3Provider(window.ethereum);
+      statusElement.innerText = 'Not currently connected to the parent app.';
+    } else {
+      provider = new RPCWeb3Provider(rpc.sendRPC);
+      statusElement.innerText = 'Connected to parent app successfully.';
+    }
+
+    console.log('provider object', provider);
+  }
+});
+
+</script>
+
+</html>
